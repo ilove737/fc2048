@@ -182,6 +182,17 @@ static void clear_nametable(void) {
 
 static unsigned int high_score = 0;
 
+/* 增量重绘状态：记录上一帧已绘制的棋盘/分数，移动时只更新变化部分 */
+static unsigned char prev_board[BOARD_SIZE * BOARD_SIZE];
+static unsigned int  prev_score;
+static unsigned int  prev_high;
+static unsigned char prev_game_over;
+
+/* neslib set_vram_update 使用的更新列表（vblank 内自动写入，无需 ppu_off 黑屏） */
+#define UPD_MAX 256
+static unsigned char upd[UPD_MAX];
+static unsigned char *upd_ptr;
+
 static void draw_score(void) {
     unsigned char d[5];
     unsigned int s;
@@ -301,24 +312,87 @@ static void draw_score(void) {
     vram_adr(AT_ADDR(27 + 4, 27)); vram_put(0xa0);
 }
 
-static void draw_game_over(void) {
-    unsigned char i;
-    const unsigned char str[] = {
+/* 向更新列表追加"某格第 2 行 4 个瓦片"（居中数字，空位 TILE_EMPTY）。
+   其余三行恒为空，无需更新。 */
+static void upd_cell(unsigned char sx, unsigned char sy, unsigned char val) {
+    unsigned char chars[4];
+    unsigned char tiles[4];
+    unsigned char row[4];
+    unsigned char n, i, sc;
+    unsigned int adr;
+
+    n = get_chars(val, chars);
+    for (i = 0; i < 4; i++) {
+        if (i < n) {
+            unsigned char c = (unsigned char)chars[i];
+            if (c >= '0' && c <= '9') tiles[i] = c - 0x20;
+            else tiles[i] = c;
+        } else {
+            tiles[i] = TILE_EMPTY;
+        }
+    }
+
+    sc = (unsigned char)((4 - n) / 2);
+    for (i = 0; i < 4; i++) row[i] = TILE_EMPTY;
+    for (i = 0; i < n; i++) row[sc + i] = tiles[i];
+
+    adr = NT_ADDR(sx, sy + 1);
+    *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
+    *upd_ptr++ = (unsigned char)(adr & 0xff);
+    *upd_ptr++ = 4;
+    *upd_ptr++ = row[0]; *upd_ptr++ = row[1];
+    *upd_ptr++ = row[2]; *upd_ptr++ = row[3];
+}
+
+/* 向更新列表追加 5 位分数（第 2 行，从 start_col 起），复用 draw_score 的前导零逻辑 */
+static void upd_digits(unsigned char start_col, unsigned int value) {
+    unsigned char d[5];
+    unsigned char lead = 0;
+    unsigned char col = start_col;
+    unsigned char k;
+    unsigned int adr;
+
+    d[0] = (unsigned char)(value % 10); value = value / 10;
+    d[1] = (unsigned char)(value % 10); value = value / 10;
+    d[2] = (unsigned char)(value % 10); value = value / 10;
+    d[3] = (unsigned char)(value % 10); value = value / 10;
+    d[4] = (unsigned char)(value % 10);
+
+    adr = NT_ADDR(col, 2);
+    *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
+    *upd_ptr++ = (unsigned char)(adr & 0xff);
+    *upd_ptr++ = 5;
+    for (k = 4; k >= 1; k--) {
+        if (lead || d[k] != 0) { *upd_ptr++ = d[k] + 0x10; lead = 1; }
+        else { *upd_ptr++ = TILE_EMPTY; }
+    }
+    *upd_ptr++ = d[0] + 0x10;
+}
+
+/* 向更新列表追加 GAME OVER 文字与属性表（仅在首次出现时调用） */
+static void upd_game_over(void) {
+    static const unsigned char str[] = {
         'G' - 0x20, 'A' - 0x20, 'M' - 0x20, 'E' - 0x20,
-        0x00, /* space */
+        0x00,
         'O' - 0x20, 'V' - 0x20, 'E' - 0x20, 'R' - 0x20
     };
     unsigned char x = (32 - 9) / 2;
-    vram_adr(NT_ADDR(x, 14));
-    for (i = 0; i < 9; i++) {
-        vram_put(str[i]);
-    }
+    unsigned char i;
+    unsigned int adr;
 
-    /* 设置属性表，使 GAME OVER 区域使用 3 号背景调色板（亮红）。
-       该行位于 rowband=3(row 14)，列 11~19 跨 colband 2/3/4（x 为起始列）。 */
-    vram_adr(AT_ADDR(x,     14)); vram_put(0xC0);  /* cols 8-11 ：仅右下象限（G） */
-    vram_adr(AT_ADDR(x + 4, 14)); vram_put(0xF0);  /* cols 12-15：下方两象限（GAME+空格） */
-    vram_adr(AT_ADDR(x + 8, 14)); vram_put(0xF0);  /* cols 16-19：下方两象限（OVER） */
+    adr = NT_ADDR(x, 14);
+    *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
+    *upd_ptr++ = (unsigned char)(adr & 0xff);
+    *upd_ptr++ = 9;
+    for (i = 0; i < 9; i++) *upd_ptr++ = str[i];
+
+    /* 属性表：非连续单写（MSB=0x23 < 0x40，解析器按非连续单字节写处理：MSB, LSB, 字节） */
+    adr = AT_ADDR(x,     14);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xC0;
+    adr = AT_ADDR(x + 4, 14);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xF0;
+    adr = AT_ADDR(x + 8, 14);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xF0;
 }
 
 void main(void) {
@@ -326,6 +400,7 @@ void main(void) {
     unsigned char moved;
     unsigned char prev_pad;
     unsigned char game_over;
+    unsigned char i;
 
     game_over = 0;
 
@@ -339,6 +414,14 @@ void main(void) {
     draw_score();
 
     ppu_on_all();
+
+    /* 初始化增量重绘状态：记录首屏，并把更新列表置空（不每帧重写） */
+    for (i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) prev_board[i] = board[i];
+    prev_score = 0;
+    prev_high = 0;
+    prev_game_over = 0;
+    upd[0] = 0xff;
+    set_vram_update(upd);
 
     prev_pad = 0;
 
@@ -372,11 +455,23 @@ void main(void) {
             game_add_random();
             if (!game_can_move()) game_over = 1;
             if (game_score > high_score) high_score = game_score;
-            ppu_off();
-            render_board();
-            draw_score();
-            if (game_over) draw_game_over();
-            ppu_on_all();
+
+            /* 增量更新：仅把变化的格子/分数写入更新列表，由 neslib 在 vblank 内自动写入，
+               不再用 ppu_off() 黑屏，从而消除移动时的闪烁。 */
+            upd_ptr = upd;
+            for (i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) {
+                if (board[i] != prev_board[i]) {
+                    unsigned char r = (unsigned char)(i / BOARD_SIZE);
+                    unsigned char c = (unsigned char)(i % BOARD_SIZE);
+                    upd_cell(BOARD_X + c * CELL_TILES, BOARD_Y + r * CELL_TILES, board[i]);
+                    prev_board[i] = board[i];
+                }
+            }
+            if (game_score != prev_score) { upd_digits(9, game_score);  prev_score = game_score; }
+            if (high_score != prev_high)  { upd_digits(25, high_score); prev_high  = high_score; }
+            if (game_over && !prev_game_over) { upd_game_over(); prev_game_over = 1; }
+            *upd_ptr++ = 0xff;
+            set_vram_update(upd);
         }
 
         if (moved == 2) {
@@ -385,6 +480,14 @@ void main(void) {
             draw_border();
             draw_score();
             ppu_on_all();
+
+            /* 重开后刷新增量状态，并停止旧更新列表的应用（避免覆盖新画面） */
+            for (i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) prev_board[i] = board[i];
+            prev_score = 0;
+            prev_high = high_score;
+            prev_game_over = 0;
+            upd[0] = 0xff;
+            set_vram_update(upd);
         }
     }
 }
