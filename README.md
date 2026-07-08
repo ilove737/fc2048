@@ -2,6 +2,8 @@
 
 2048 游戏 NES 移植版，使用 cc65 工具链（C/汇编混合）开发。
 
+![game over](doc/gameover.png)
+
 ## neslib 介绍
 
 | 路径 | 说明 |

@@ -1,7 +1,14 @@
 #include "../neslib/neslib.h"
 #include "game.h"
 
+/* 名称表(nametable)地址：给定背景瓦片坐标(x,y)（x 为列 0~31，y 为行 0~29），
+   返回该瓦片在名称表中的 PPU 地址。名称表起始于 0x2000，每行 32 个瓦片。 */
 #define NT_ADDR(x, y) (0x2000 + (y) * 32 + (x))
+
+/* 属性表地址：给定背景瓦片坐标(tx,ty)，返回其所在属性字节地址。
+   属性表位于 0x23C0，屏幕按 4x4 瓦片分块，每块 1 字节（见 draw_game_over）。
+   用法与 NT_ADDR 对应，用于把某区域指向指定背景调色板来"设置颜色"。 */
+#define AT_ADDR(tx, ty) (0x23C0 + ((ty) / 4) * 8 + ((tx) / 4))
 
 /* Board: 4x4 tiles per cell = 16x16 tiles total */
 #define CELL_TILES 4
@@ -22,11 +29,35 @@
 /* ASCII tile mapping: '0' = 0x30, '1' = 0x31, etc. */
 #define ASCII_0 0x30
 
+/* ============================================================
+ * NES 2C02 调色板完整参考（共 64 色，索引 0x00~0x3F）
+ * 注意：实际显示颜色因模拟器/电视略有差异；
+ *       0x0D/0x0E/0x0F/0x1D/0x1E/0x1F/0x2E/0x2F/0x3E/0x3F 近似黑/透明，慎用于文字。
+ * 本游戏背景只用前 16 字节(pal0~pal3)，精灵用后 16 字节(pal4~pal7，未用)。
+ * 本游戏用到的：0x0F(黑底)、0x00(黑)、0x10(深蓝灰)、0x15(亮红，GAME OVER)、0x30(白，文字)。
+ * ============================================================
+ * 0x00 深灰      0x10 浅灰      0x20 亮白      0x30 极浅灰
+ * 0x01 午夜蓝    0x11 浅蓝      0x21 浅蓝      0x31 极浅蓝
+ * 0x02 深蓝      0x12 蓝        0x22 淡蓝      0x32 浅灰蓝
+ * 0x03 靛蓝      0x13 紫        0x23 天蓝      0x33 蓝紫(periwinkle)
+ * 0x04 深紫      0x14 浅紫      0x24 薰衣草    0x34 极浅薰衣草
+ * 0x05 酒红/品红 0x15 鲑红(亮红) 0x25 浅粉      0x35 浅鲑红
+ * 0x06 栗色      0x16 红/橙红   0x26 珊瑚红    0x36 桃色
+ * 0x07 暗红      0x17 橙        0x27 橙        0x37 亮黄
+ * 0x08 棕        0x18 黄棕      0x28 黄        0x38 金黄
+ * 0x09 深绿      0x19 深叶绿    0x29 中亮绿    0x39 黄绿
+ * 0x0A 暗绿      0x1A 中绿      0x2A 亮霓虹绿  0x3A 亮绿
+ * 0x0B 青绿      0x1B 亮绿      0x2B 水绿      0x3B 水绿
+ * 0x0C 深青蓝    0x1C 青        0x2C 青        0x3C 浅青
+ * 0x0D 黑(透明)  0x1D 黑(透明)  0x2D 浅灰      0x3D 银
+ * 0x0E 黑(透明)  0x1E 黑(透明)  0x2E 黑(透明)  0x3E 黑(透明)
+ * 0x0F 黑(透明)  0x1F 黑(透明)  0x2F 黑(透明)  0x3F 黑(透明)
+ * ============================================================ */
 static const unsigned char palette[32] = {
     0x0F, 0x00, 0x10, 0x30,
-    0x0F, 0x00, 0x10, 0x30,
-    0x0F, 0x00, 0x10, 0x30,
-    0x0F, 0x00, 0x10, 0x30,
+    0x0F, 0x00, 0x10, 0x1B,
+    0x0F, 0x00, 0x10, 0x17,
+    0x0F, 0x00, 0x10, 0x15,   /* 背景调色板3：亮红前景(color3)，用于 GAME OVER */
     0x0F, 0x00, 0x10, 0x30,
     0x0F, 0x00, 0x10, 0x30,
     0x0F, 0x00, 0x10, 0x30,
@@ -156,6 +187,7 @@ static void draw_score(void) {
     unsigned int s;
     unsigned char lead;
     unsigned char col;
+    unsigned char nameIndex = 17;
 
     s = game_score;
     d[0] = (unsigned char)(s % 10); s = s / 10;
@@ -171,22 +203,10 @@ static void draw_score(void) {
     vram_adr(NT_ADDR(6, 2)); vram_put('R' - 0x20);
     vram_adr(NT_ADDR(7, 2)); vram_put('E' - 0x20);
 
-    /* 署名 */
-    vram_adr(NT_ADDR(16, 27)); vram_put('F' - 0x20);
-    vram_adr(NT_ADDR(17, 27)); vram_put('C' - 0x20);
-    vram_adr(NT_ADDR(18, 27)); vram_put('2' - 0x20);
-    vram_adr(NT_ADDR(19, 27)); vram_put('0' - 0x20);
-    vram_adr(NT_ADDR(20, 27)); vram_put('4' - 0x20);
-    vram_adr(NT_ADDR(21, 27)); vram_put('8' - 0x20);
-    vram_adr(NT_ADDR(23, 27)); vram_put('B' - 0x20);
-    vram_adr(NT_ADDR(24, 27)); vram_put('y' - 0x20);
-    vram_adr(NT_ADDR(26, 27)); vram_put('L' - 0x20);
-    vram_adr(NT_ADDR(27, 27)); vram_put('X' - 0x20);
-    vram_adr(NT_ADDR(28, 27)); vram_put('S' - 0x20);
 
     /* 5-digit score at row 3, right-aligned, suppress leading zeros */
     lead = 0;
-    col = 10;
+    col = 9;
 
     if (d[4] != 0) lead = 1;
     vram_adr(NT_ADDR(col, 2));
@@ -223,40 +243,62 @@ static void draw_score(void) {
     d[3] = (unsigned char)(s % 10); s = s / 10;
     d[4] = (unsigned char)(s % 10);
 
-    vram_adr(NT_ADDR(3, 3)); vram_put('B' - 0x20);
-    vram_adr(NT_ADDR(4, 3)); vram_put('E' - 0x20);
-    vram_adr(NT_ADDR(5, 3)); vram_put('S' - 0x20);
-    vram_adr(NT_ADDR(6, 3)); vram_put('T' - 0x20);
+    vram_adr(NT_ADDR(20, 2)); vram_put('B' - 0x20);
+    vram_adr(NT_ADDR(21, 2)); vram_put('E' - 0x20);
+    vram_adr(NT_ADDR(22, 2)); vram_put('S' - 0x20);
+    vram_adr(NT_ADDR(23, 2)); vram_put('T' - 0x20);
 
     lead = 0;
-    col = 10;
+    col = 25;
 
     if (d[4] != 0) lead = 1;
-    vram_adr(NT_ADDR(col, 3));
+    vram_adr(NT_ADDR(col, 2));
     if (lead || d[4] != 0) { vram_put(d[4] + 0x10); }
     else { vram_put(TILE_EMPTY); }
     col++;
 
     if (d[3] != 0) lead = 1;
-    vram_adr(NT_ADDR(col, 3));
+    vram_adr(NT_ADDR(col, 2));
     if (lead || d[3] != 0) { vram_put(d[3] + 0x10); }
     else { vram_put(TILE_EMPTY); }
     col++;
 
     if (d[2] != 0) lead = 1;
-    vram_adr(NT_ADDR(col, 3));
+    vram_adr(NT_ADDR(col, 2));
     if (lead || d[2] != 0) { vram_put(d[2] + 0x10); }
     else { vram_put(TILE_EMPTY); }
     col++;
 
     if (d[1] != 0) lead = 1;
-    vram_adr(NT_ADDR(col, 3));
+    vram_adr(NT_ADDR(col, 2));
     if (lead || d[1] != 0) { vram_put(d[1] + 0x10); }
     else { vram_put(TILE_EMPTY); }
     col++;
 
-    vram_adr(NT_ADDR(col, 3));
+    vram_adr(NT_ADDR(col, 2));
     vram_put(d[0] + 0x10);
+
+    /* 设置最高分为绿色 */
+    vram_adr(AT_ADDR(27,     2)); vram_put(0x50);
+    vram_adr(AT_ADDR(27 + 4, 2)); vram_put(0x50);
+
+    /* 署名 */
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('F' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('C' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('2' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('0' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('4' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('8' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put(0x0);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('B' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('y' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put(0x0);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('L' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('X' - 0x20);
+    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('S' - 0x20);
+
+    vram_adr(AT_ADDR(27,     27)); vram_put(0x80);
+    vram_adr(AT_ADDR(27 + 4, 27)); vram_put(0xa0);
 }
 
 static void draw_game_over(void) {
@@ -271,6 +313,12 @@ static void draw_game_over(void) {
     for (i = 0; i < 9; i++) {
         vram_put(str[i]);
     }
+
+    /* 设置属性表，使 GAME OVER 区域使用 3 号背景调色板（亮红）。
+       该行位于 rowband=3(row 14)，列 11~19 跨 colband 2/3/4（x 为起始列）。 */
+    vram_adr(AT_ADDR(x,     14)); vram_put(0xC0);  /* cols 8-11 ：仅右下象限（G） */
+    vram_adr(AT_ADDR(x + 4, 14)); vram_put(0xF0);  /* cols 12-15：下方两象限（GAME+空格） */
+    vram_adr(AT_ADDR(x + 8, 14)); vram_put(0xF0);  /* cols 16-19：下方两象限（OVER） */
 }
 
 void main(void) {
