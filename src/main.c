@@ -386,7 +386,7 @@ static void upd_game_over(void) {
     *upd_ptr++ = 9;
     for (i = 0; i < 9; i++) *upd_ptr++ = str[i];
 
-    /* 属性表：非连续单写（MSB=0x23 < 0x40，解析器按非连续单字节写处理：MSB, LSB, 字节） */
+    /* 属性表：非连续单字节写 */
     adr = AT_ADDR(x,     14);
     *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xC0;
     adr = AT_ADDR(x + 4, 14);
@@ -455,16 +455,21 @@ void main(void) {
             game_add_random();
             if (!game_can_move()) game_over = 1;
             if (game_score > high_score) high_score = game_score;
+        }
 
-            /* 增量更新：仅把变化的格子/分数写入更新列表，由 neslib 在 vblank 内自动写入，
-               不再用 ppu_off() 黑屏，从而消除移动时的闪烁。 */
+        /* 增量更新：每帧至多写 8 格，超出部分分摊到后续帧以避免 VBlank 溢出
+           （未写入的格子因 prev_board 未更新，下一帧会继续补上） */
+        {
+            unsigned char cells_written = 0;
             upd_ptr = upd;
             for (i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) {
                 if (board[i] != prev_board[i]) {
                     unsigned char r = (unsigned char)(i / BOARD_SIZE);
                     unsigned char c = (unsigned char)(i % BOARD_SIZE);
+                    if (cells_written >= 8) break;
                     upd_cell(BOARD_X + c * CELL_TILES, BOARD_Y + r * CELL_TILES, board[i]);
                     prev_board[i] = board[i];
+                    cells_written++;
                 }
             }
             if (game_score != prev_score) { upd_digits(9, game_score);  prev_score = game_score; }
@@ -479,15 +484,16 @@ void main(void) {
             render_board();
             draw_border();
             draw_score();
+            /* 清空旧更新列表，避免 ppu_on_all 的 NMI 冲掉新画面 */
+            upd[0] = 0xff;
+            set_vram_update(upd);
             ppu_on_all();
 
-            /* 重开后刷新增量状态，并停止旧更新列表的应用（避免覆盖新画面） */
+            /* 重开后刷新增量状态 */
             for (i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) prev_board[i] = board[i];
             prev_score = 0;
             prev_high = high_score;
             prev_game_over = 0;
-            upd[0] = 0xff;
-            set_vram_update(upd);
         }
     }
 }
