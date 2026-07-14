@@ -14,17 +14,25 @@
 #define CELL_TILES 4
 #define BOARD_TILES (BOARD_SIZE * CELL_TILES)
 
-/* Board position: centered on 32x30 screen */
+/* Board position: 4×4 grid, each cell = 4×4 tiles (32×32 px).
+   BOARD_Y=8 ensures cell-tile-Y is a multiple of 4 → each cell maps to
+   exactly one attribute table byte. */
 #define BOARD_X ((32 - BOARD_TILES) / 2)
-#define BOARD_Y ((30 - BOARD_TILES) / 2)
+#define BOARD_Y ((30 - BOARD_TILES + 2) / 2)  /* 8 */
 
-/* Border tile indices */
-#define TILE_TL      0x80
-#define TILE_TR      0x81
-#define TILE_BL      0x82
-#define TILE_BR      0x83
-#define TILE_HLINE   0x84
-#define TILE_VLINE   0x85
+/* Border tile indices (all in pattern table 0, 0-255) */
+#define TILE_TL      192
+#define TILE_TR      193
+#define TILE_BL      194
+#define TILE_BR      195
+#define TILE_HLINE   196
+#define TILE_VLINE   197
+
+/* Shared block background (tiles 96-103) */
+#define BLOCK_BG     96
+
+/* Digit tiles base (tiles 104, each value = 8 tiles) */
+#define DIGIT_BASE   104
 
 /* ASCII tile mapping: '0' = 0x30, '1' = 0x31, etc. */
 #define ASCII_0 0x30
@@ -54,88 +62,103 @@
  * 0x0F 黑(透明)  0x1F 黑(透明)  0x2F 黑(透明)  0x3F 黑(透明)
  * ============================================================ */
 static const unsigned char palette[32] = {
-    0x0F, 0x2C, 0x10, 0x30,   /* pal0 第1色调亮为 0x2C，供边框使用 */
-    0x0F, 0x00, 0x10, 0x1B,
-    0x0F, 0x00, 0x10, 0x17,
-    0x0F, 0x00, 0x10, 0x15,   /* 背景调色板3：亮红前景(color3)，用于 GAME OVER */
+    0x0F, 0x2C, 0x10, 0x30,   /* pal0 边框+空块 */
+    0x0F, 0x27, 0x10, 0x30,   /* pal1 值 2,4    ：橙黄底 */
+    0x0F, 0x16, 0x17, 0x30,   /* pal2 值 8,16,32：红橙底 */
+    0x0F, 0x06, 0x15, 0x30,   /* pal3 值 64+    ：棕红底/亮红字 */
     0x0F, 0x00, 0x10, 0x30,
     0x0F, 0x00, 0x10, 0x30,
     0x0F, 0x00, 0x10, 0x30,
     0x0F, 0x00, 0x10, 0x30,
 };
 
-/* Map board value (exponent) to digit string characters.
-   Returns array of ASCII code points, len=number of chars */
-static unsigned char get_chars(unsigned char val, unsigned char *buf) {
-    /* Values: 0=empty,1='2',2='4',3='8',4='16',5='32',6='64',
-               7='128',8='256',9='512',10='1024',11='2048' */
-    switch (val) {
-        case 0:  return 0;  /* empty */
-        case 1:  buf[0]='2'; return 1;
-        case 2:  buf[0]='4'; return 1;
-        case 3:  buf[0]='8'; return 1;
-        case 4:  buf[0]='1'; buf[1]='6'; return 2;
-        case 5:  buf[0]='3'; buf[1]='2'; return 2;
-        case 6:  buf[0]='6'; buf[1]='4'; return 2;
-        case 7:  buf[0]='1'; buf[1]='2'; buf[2]='8'; return 3;
-        case 8:  buf[0]='2'; buf[1]='5'; buf[2]='6'; return 3;
-        case 9:  buf[0]='5'; buf[1]='1'; buf[2]='2'; return 3;
-        case 10: buf[0]='1'; buf[1]='0'; buf[2]='2'; buf[3]='4'; return 4;
-        case 11: buf[0]='2'; buf[1]='0'; buf[2]='4'; buf[3]='8'; return 4;
-        default: return 0;
-    }
+/* Value → palette index for cell attribute table */
+static unsigned char val_palette(unsigned char val) {
+    if (val == 0) return 0;
+    if (val <= 2) return 1;  /* 2, 4 */
+    if (val <= 5) return 2;  /* 8, 16, 32 */
+    return 3;                 /* 64+ */
 }
 
-/* Write 4x4 tile block for a cell, digits centered horizontally in row 1 */
+/* Write a 4×4 cell: shared background + value-specific digit tiles */
 static void draw_cell(unsigned char sx, unsigned char sy, unsigned char val) {
-    unsigned char chars[4];
-    unsigned char n;
-    unsigned char i;
-    unsigned char tiles[4];
-    unsigned char sc;
-
-    n = get_chars(val, chars);
-
-    for (i = 0; i < 4; i++) {
-        if (i < n) {
-            unsigned char c = (unsigned char)chars[i];
-            if (c >= '0' && c <= '9') {
-                tiles[i] = c - 0x20;
-            } else {
-                tiles[i] = c;
-            }
-        } else {
-            tiles[i] = TILE_EMPTY;
+    unsigned char r, c, base, p, attr;
+    if (val == 0) {
+        for (r = 0; r < 4; r++) {
+            vram_adr(NT_ADDR(sx, sy + r));
+            vram_fill(TILE_EMPTY, 4);
         }
+        vram_adr(AT_ADDR(sx, sy));
+        vram_put(0);
+        return;
     }
-
+    base = DIGIT_BASE + (unsigned char)(val - 1) * 8;
+    /* Row 0: bg[0..3] */
     vram_adr(NT_ADDR(sx, sy));
-    vram_fill(TILE_EMPTY, 4);
+    for (c = 0; c < 4; c++) vram_put(BLOCK_BG + c);
+    /* Row 1: digit[0..3] */
     vram_adr(NT_ADDR(sx, sy + 1));
-    vram_fill(TILE_EMPTY, 4);
+    for (c = 0; c < 4; c++) vram_put(base + c);
+    /* Row 2: digit[4..7] */
     vram_adr(NT_ADDR(sx, sy + 2));
-    vram_fill(TILE_EMPTY, 4);
+    for (c = 0; c < 4; c++) vram_put(base + 4 + c);
+    /* Row 3: bg[4..7] */
     vram_adr(NT_ADDR(sx, sy + 3));
-    vram_fill(TILE_EMPTY, 4);
+    for (c = 0; c < 4; c++) vram_put(BLOCK_BG + 4 + c);
+    /* Attribute */
+    p = val_palette(val);
+    attr = p | (p << 2) | (p << 4) | (p << 6);
+    vram_adr(AT_ADDR(sx, sy));
+    vram_put(attr);
+}
 
-    sc = (unsigned char)((4 - n) / 2);
+/* neslib set_vram_update */
+#define UPD_MAX 300
+static unsigned char upd[UPD_MAX];
+static unsigned char *upd_ptr;
 
-    if (n >= 1) {
-        vram_adr(NT_ADDR(sx + sc, sy + 1));
-        vram_put(tiles[0]);
+/* Append cell update to buffer: 4 horizontal sequences + attribute */
+static void upd_cell(unsigned char sx, unsigned char sy, unsigned char val) {
+    unsigned char r, c, base, p, attr;
+    unsigned int adr, tiles[4];
+
+    if (val == 0) {
+        for (r = 0; r < 4; r++) {
+            adr = NT_ADDR(sx, sy + r);
+            *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
+            *upd_ptr++ = (unsigned char)(adr & 0xff);
+            *upd_ptr++ = 4;
+            for (c = 0; c < 4; c++) *upd_ptr++ = TILE_EMPTY;
+        }
+        adr = AT_ADDR(sx, sy);
+        *upd_ptr++ = (unsigned char)(adr >> 8);
+        *upd_ptr++ = (unsigned char)(adr & 0xff);
+        *upd_ptr++ = 0;
+        return;
     }
-    if (n >= 2) {
-        vram_adr(NT_ADDR(sx + sc + 1, sy + 1));
-        vram_put(tiles[1]);
+    base = DIGIT_BASE + (unsigned char)(val - 1) * 8;
+    for (r = 0; r < 4; r++) {
+        adr = NT_ADDR(sx, sy + r);
+        *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
+        *upd_ptr++ = (unsigned char)(adr & 0xff);
+        *upd_ptr++ = 4;
+        if (r == 0) {
+            tiles[0]=BLOCK_BG; tiles[1]=BLOCK_BG+1; tiles[2]=BLOCK_BG+2; tiles[3]=BLOCK_BG+3;
+        } else if (r == 1) {
+            tiles[0]=base; tiles[1]=base+1; tiles[2]=base+2; tiles[3]=base+3;
+        } else if (r == 2) {
+            tiles[0]=base+4; tiles[1]=base+5; tiles[2]=base+6; tiles[3]=base+7;
+        } else {
+            tiles[0]=BLOCK_BG+4; tiles[1]=BLOCK_BG+5; tiles[2]=BLOCK_BG+6; tiles[3]=BLOCK_BG+7;
+        }
+        for (c = 0; c < 4; c++) *upd_ptr++ = tiles[c];
     }
-    if (n >= 3) {
-        vram_adr(NT_ADDR(sx + sc + 2, sy + 1));
-        vram_put(tiles[2]);
-    }
-    if (n >= 4) {
-        vram_adr(NT_ADDR(sx + sc + 3, sy + 1));
-        vram_put(tiles[3]);
-    }
+    p = val_palette(val);
+    attr = p | (p << 2) | (p << 4) | (p << 6);
+    adr = AT_ADDR(sx, sy);
+    *upd_ptr++ = (unsigned char)(adr >> 8);
+    *upd_ptr++ = (unsigned char)(adr & 0xff);
+    *upd_ptr++ = attr;
 }
 
 static void render_board(void) {
@@ -187,11 +210,6 @@ static unsigned char prev_board[BOARD_SIZE * BOARD_SIZE];
 static unsigned int  prev_score;
 static unsigned int  prev_high;
 static unsigned char prev_game_over;
-
-/* neslib set_vram_update 使用的更新列表（vblank 内自动写入，无需 ppu_off 黑屏） */
-#define UPD_MAX 256
-static unsigned char upd[UPD_MAX];
-static unsigned char *upd_ptr;
 
 static void draw_score(void) {
     unsigned char d[5];
@@ -312,38 +330,6 @@ static void draw_score(void) {
     vram_adr(AT_ADDR(27 + 4, 27)); vram_put(0xa0);
 }
 
-/* 向更新列表追加"某格第 2 行 4 个瓦片"（居中数字，空位 TILE_EMPTY）。
-   其余三行恒为空，无需更新。 */
-static void upd_cell(unsigned char sx, unsigned char sy, unsigned char val) {
-    unsigned char chars[4];
-    unsigned char tiles[4];
-    unsigned char row[4];
-    unsigned char n, i, sc;
-    unsigned int adr;
-
-    n = get_chars(val, chars);
-    for (i = 0; i < 4; i++) {
-        if (i < n) {
-            unsigned char c = (unsigned char)chars[i];
-            if (c >= '0' && c <= '9') tiles[i] = c - 0x20;
-            else tiles[i] = c;
-        } else {
-            tiles[i] = TILE_EMPTY;
-        }
-    }
-
-    sc = (unsigned char)((4 - n) / 2);
-    for (i = 0; i < 4; i++) row[i] = TILE_EMPTY;
-    for (i = 0; i < n; i++) row[sc + i] = tiles[i];
-
-    adr = NT_ADDR(sx, sy + 1);
-    *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
-    *upd_ptr++ = (unsigned char)(adr & 0xff);
-    *upd_ptr++ = 4;
-    *upd_ptr++ = row[0]; *upd_ptr++ = row[1];
-    *upd_ptr++ = row[2]; *upd_ptr++ = row[3];
-}
-
 /* 向更新列表追加 5 位分数（第 2 行，从 start_col 起），复用 draw_score 的前导零逻辑 */
 static void upd_digits(unsigned char start_col, unsigned int value) {
     unsigned char d[5];
@@ -373,26 +359,26 @@ static void upd_digits(unsigned char start_col, unsigned int value) {
 static void upd_game_over(void) {
     static const unsigned char str[] = {
         'G' - 0x20, 'A' - 0x20, 'M' - 0x20, 'E' - 0x20,
-        0x00,
+        0x00, 0x00,
         'O' - 0x20, 'V' - 0x20, 'E' - 0x20, 'R' - 0x20
     };
-    unsigned char x = (32 - 9) / 2;
+    unsigned char x = (32 - 10) / 2;
     unsigned char i;
     unsigned int adr;
 
-    adr = NT_ADDR(x, 14);
+    adr = NT_ADDR(x, 6);
     *upd_ptr++ = (unsigned char)((adr >> 8) | NT_UPD_HORZ);
     *upd_ptr++ = (unsigned char)(adr & 0xff);
-    *upd_ptr++ = 9;
-    for (i = 0; i < 9; i++) *upd_ptr++ = str[i];
+    *upd_ptr++ = 10;
+    for (i = 0; i < 10; i++) *upd_ptr++ = str[i];
 
     /* 属性表：非连续单字节写 */
-    adr = AT_ADDR(x,     14);
-    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xC0;
-    adr = AT_ADDR(x + 4, 14);
-    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xF0;
-    adr = AT_ADDR(x + 8, 14);
-    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0xF0;
+    adr = AT_ADDR(x,     6);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0x0C;
+    adr = AT_ADDR(x + 4, 6);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0x0F;
+    adr = AT_ADDR(x + 8, 6);
+    *upd_ptr++ = (unsigned char)(adr >> 8); *upd_ptr++ = (unsigned char)(adr & 0xff); *upd_ptr++ = 0x0F;
 }
 
 void main(void) {
@@ -457,7 +443,8 @@ void main(void) {
             if (game_score > high_score) high_score = game_score;
         }
 
-        /* 增量更新：每帧至多写 8 格，超出部分分摊到后续帧以避免 VBlank 溢出
+        /* 增量更新：每帧至多写 2 格（每格 4 水平序列+属性≈708 周期），
+           超出部分分摊到后续帧以避免 VBlank 溢出
            （未写入的格子因 prev_board 未更新，下一帧会继续补上） */
         {
             unsigned char cells_written = 0;
@@ -466,7 +453,7 @@ void main(void) {
                 if (board[i] != prev_board[i]) {
                     unsigned char r = (unsigned char)(i / BOARD_SIZE);
                     unsigned char c = (unsigned char)(i % BOARD_SIZE);
-                    if (cells_written >= 8) break;
+                    if (cells_written >= 2) break;
                     upd_cell(BOARD_X + c * CELL_TILES, BOARD_Y + r * CELL_TILES, board[i]);
                     prev_board[i] = board[i];
                     cells_written++;
