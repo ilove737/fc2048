@@ -311,23 +311,29 @@ static void draw_score(void) {
     vram_adr(AT_ADDR(27,     2)); vram_put(0x50);
     vram_adr(AT_ADDR(27 + 4, 2)); vram_put(0x50);
 
-    /* 署名 */
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('F' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('C' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('2' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('0' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('4' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('8' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put(0x0);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('B' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('y' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put(0x0);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('L' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('X' - 0x20);
-    vram_adr(NT_ADDR(nameIndex++, 27)); vram_put('S' - 0x20);
+    /* CJK 汉字：公孙林敬上（手动绘制 16×16 像素，每字 4 瓦片 2×2） */
+    #define CJK_GONG 198
+    #define CJK_SUN  202
+    #define CJK_LIN  206
+    #define CJK_JING 210
+    #define CJK_SHANG 214
 
-    vram_adr(AT_ADDR(27,     27)); vram_put(0x80);
-    vram_adr(AT_ADDR(27 + 4, 27)); vram_put(0xa0);
+    /* 署名：公孙林敬上 */
+    {
+        unsigned char cx = (32 - 10) / 2;  /* 居中，10 瓦片宽 */
+        unsigned char cy = 27;
+        unsigned char cjk[] = { CJK_GONG, CJK_SUN, CJK_LIN, CJK_JING, CJK_SHANG };
+        unsigned char ci;
+        for (ci = 0; ci < 5; ci++) {
+            unsigned char base = cjk[ci];
+            vram_adr(NT_ADDR(cx + ci*2, cy));
+            vram_put(base);   /* 左上 */
+            vram_put(base+1); /* 右上 */
+            vram_adr(NT_ADDR(cx + ci*2, cy+1));
+            vram_put(base+2); /* 左下 */
+            vram_put(base+3); /* 右下 */
+        }
+    }
 }
 
 /* 向更新列表追加 5 位分数（第 2 行，从 start_col 起），复用 draw_score 的前导零逻辑 */
