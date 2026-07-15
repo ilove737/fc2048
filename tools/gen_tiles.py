@@ -153,6 +153,7 @@ def compose_digit_tiles(full16_bg, digit_str):
                                 if 0 <= cx < 32 and 0 <= cy < 16:
                                     canvas[cy][cx] = 3
     elif n == 2:
+        # 两个数字：2x 缩放（瘦身），居中排列，各边留 4 像素间距
         for i, ch in enumerate(digit_str):
             glyph = ALL_GLYPHS.get(ch)
             if not glyph: continue
@@ -170,20 +171,22 @@ def compose_digit_tiles(full16_bg, digit_str):
                                 if 0 <= cx < 32 and 0 <= cy < 16:
                                     canvas[cy][cx] = 3
     else:
+        # 三/四个数字：水平排列，2× 垂直放大
         dw = 7 if n == 4 else 8
         total_w = n * dw
         ox = (32 - total_w) // 2 + (2 if n == 3 else 0) + (1 if n == 4 else 0)
-        oy = (16 - 8) // 2
+        oy = (16 - 7 * 2) // 2  # 垂直居中（14 像素高）
         for i, ch in enumerate(digit_str):
             glyph = ALL_GLYPHS.get(ch)
             if not glyph: continue
             for dy in range(7):
                 for dx in range(5):
                     if glyph[dy][dx]:
-                        sx = ox + i * dw + dx
-                        sy = oy + dy
-                        if 0 <= sx < 32 and 0 <= sy < 16:
-                            canvas[sy][sx] = 3
+                        for sy in range(2):
+                            sx = ox + i * dw + dx
+                            cy = oy + dy * 2 + sy
+                            if 0 <= sx < 32 and 0 <= cy < 16:
+                                canvas[cy][sx] = 3
 
     # 画布切到 8 瓦片（行 1-2，列 0-3，行主序 idx = ty*4 + tx）
     digit_tiles = []
