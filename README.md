@@ -41,6 +41,16 @@ cd ../fc2048
 
 编译后 `../cc65/bin/` 目录下包含所有工具，`../cc65/lib/` 目录下包含运行时库。
 
+### 更新 CHR 瓦片
+
+更新方式：`python3  tools/gen_tiles.py` 
+
+### CHR 瓦片预览
+
+![CHR 瓦片表 + 数字方块](doc/fc2048-chr.png)
+
+生成方式：`python3 tools/chrview.py tiles.chr`
+
 ### 编译 ROM
 
 ```bash
