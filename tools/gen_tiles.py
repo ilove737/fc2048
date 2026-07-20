@@ -100,20 +100,26 @@ def make_block_bg_tiles():
     shared8:  8 瓦片（行 0 的 4 瓦片 + 行 3 的 4 瓦片）
     """
     block = [[0]*32 for _ in range(32)]
-    R = 3
-    for y in range(32):
-        for x in range(32):
+    R = 2
+    # 30×30 可见块居中在 32×32 格内（偏移 1px）
+    # 块内：1px 边框 + 28×28 填充 + 1px 边框
+    OFFSET = 1
+    SIZE = 30
+    for ly in range(SIZE):
+        for lx in range(SIZE):
+            y = ly + OFFSET
+            x = lx + OFFSET
             in_corner = False
-            if x < R and y < R:
-                in_corner = (x - R + 0.5)**2 + (y - R + 0.5)**2 > R*R - 1
-            elif x >= 32 - R and y < R:
-                in_corner = (x - 31 + R - 0.5)**2 + (y - R + 0.5)**2 > R*R - 1
-            elif x < R and y >= 32 - R:
-                in_corner = (x - R + 0.5)**2 + (y - 31 + R - 0.5)**2 > R*R - 1
-            elif x >= 32 - R and y >= 32 - R:
-                in_corner = (x - 31 + R - 0.5)**2 + (y - 31 + R - 0.5)**2 > R*R - 1
+            if lx < R and ly < R:
+                in_corner = (lx - R + 0.5)**2 + (ly - R + 0.5)**2 > R*R - 1
+            elif lx >= SIZE - R and ly < R:
+                in_corner = (lx - (SIZE - 1) + R - 0.5)**2 + (ly - R + 0.5)**2 > R*R - 1
+            elif lx < R and ly >= SIZE - R:
+                in_corner = (lx - R + 0.5)**2 + (ly - (SIZE - 1) + R - 0.5)**2 > R*R - 1
+            elif lx >= SIZE - R and ly >= SIZE - R:
+                in_corner = (lx - (SIZE - 1) + R - 0.5)**2 + (ly - (SIZE - 1) + R - 0.5)**2 > R*R - 1
             if not in_corner:
-                if y < 2 or y >= 30 or x < 2 or x >= 30:
+                if ly < 1 or ly >= SIZE - 1 or lx < 1 or lx >= SIZE - 1:
                     block[y][x] = 2
                 else:
                     block[y][x] = 1
